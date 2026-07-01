@@ -11,6 +11,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 from utils.branding import injetar_estilos
 from utils.clean import carregar_planilha_local, limpar_planilha
 from utils.dashboard import render_dashboard
+from utils.secrets_cfg import exibir_erro_config_ausente, ler_config_secrets
 
 
 @st.cache_data(show_spinner="Carregando dados...")
@@ -55,13 +56,9 @@ def carregar_dados(
     return df, meta
 
 
-def _ler_config_secrets() -> tuple[dict, dict, dict]:
+def _ler_config_secrets():
     try:
-        return (
-            dict(st.secrets.get("servicos", {})),
-            dict(st.secrets.get("planilhas", {})),
-            dict(st.secrets.get("locais", {})),
-        )
+        return ler_config_secrets()
     except StreamlitSecretNotFoundError as exc:
         st.error("Não foi possível ler os Secrets do app.")
         st.exception(exc)
@@ -91,7 +88,7 @@ def main() -> None:
     servicos, planilhas_cfg, locais_cfg = _ler_config_secrets()
 
     if not servicos:
-        st.error("Nenhum serviço configurado em [servicos] nos Secrets.")
+        exibir_erro_config_ausente()
         st.stop()
 
     with st.sidebar:
