@@ -17,6 +17,8 @@ TIMEOUT_SEGUNDOS = 60
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MIME_GSHEET = "application/vnd.google-apps.spreadsheet"
+MIME_SHORTCUT = "application/vnd.google-apps.shortcut"
+MIME_PLANILHAS = (MIME_XLSX, MIME_GSHEET)
 
 
 def _normalizar(texto: str) -> str:
@@ -33,11 +35,32 @@ def _criar_servico(credenciais: dict[str, Any]):
     return build("drive", "v3", http=http, cache_discovery=False)
 
 
-def listar_planilhas(servico, folder_id: str) -> list[dict]:
-    query = (
-        f"'{folder_id}' in parents and trashed = false and "
-        f"(mimeType = '{MIME_XLSX}' or mimeType = '{MIME_GSHEET}')"
+def _resolver_atalho(servico, arquivo: dict) -> dict | None:
+    if arquivo["mimeType"] != MIME_SHORTCUT:
+        return arquivo
+
+    detalhes = arquivo.get("shortcutDetails") or {}
+    alvo_id = detalhes.get("targetId")
+    alvo_mime = detalhes.get("targetMimeType")
+    if not alvo_id or alvo_mime not in MIME_PLANILHAS:
+        return None
+
+    alvo = (
+        servico.files()
+        .get(fileId=alvo_id, fields="modifiedTime")
+        .execute()
     )
+    return {
+        "id": alvo_id,
+        "name": arquivo["name"],
+        "mimeType": alvo_mime,
+        "modifiedTime": alvo["modifiedTime"],
+    }
+
+
+def listar_planilhas(servico, folder_id: str) -> list[dict]:
+    tipos = " or ".join(f"mimeType = '{mime}'" for mime in (*MIME_PLANILHAS, MIME_SHORTCUT))
+    query = f"'{folder_id}' in parents and trashed = false and ({tipos})"
     resultados = []
     page_token = None
     while True:
@@ -45,12 +68,18 @@ def listar_planilhas(servico, folder_id: str) -> list[dict]:
             servico.files()
             .list(
                 q=query,
-                fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
+                fields=(
+                    "nextPageToken, "
+                    "files(id, name, mimeType, modifiedTime, shortcutDetails)"
+                ),
                 pageToken=page_token,
             )
             .execute()
         )
-        resultados.extend(resposta.get("files", []))
+        for arquivo in resposta.get("files", []):
+            resolvido = _resolver_atalho(servico, arquivo)
+            if resolvido:
+                resultados.append(resolvido)
         page_token = resposta.get("nextPageToken")
         if not page_token:
             break
@@ -67,6 +96,14 @@ def selecionar_arquivo(arquivos: list[dict], padrao_nome: str | None = None) -> 
         filtrados = [a for a in arquivos if padrao in _normalizar(a["name"])]
         if filtrados:
             candidatos = filtrados
+
+    if len(candidatos) > 1 and padrao_nome:
+        padrao = _normalizar(padrao_nome)
+        prefixo = [a for a in candidatos if _normalizar(a["name"]).startswith(padrao)]
+        if prefixo:
+            candidatos = prefixo
+        menor_len = min(len(a["name"]) for a in candidatos)
+        candidatos = [a for a in candidatos if len(a["name"]) == menor_len]
 
     return sorted(candidatos, key=lambda a: a["modifiedTime"], reverse=True)[0]
 
