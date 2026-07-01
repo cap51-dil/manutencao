@@ -6,11 +6,14 @@ import io
 import unicodedata
 from typing import Any
 
+import httplib2
 from google.oauth2 import service_account
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+TIMEOUT_SEGUNDOS = 60
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MIME_GSHEET = "application/vnd.google-apps.spreadsheet"
@@ -26,7 +29,8 @@ def _criar_servico(credenciais: dict[str, Any]):
 
     creds = normalizar_credenciais_gcp(credenciais)
     credentials = service_account.Credentials.from_service_account_info(creds, scopes=SCOPES)
-    return build("drive", "v3", credentials=credentials, cache_discovery=False)
+    http = AuthorizedHttp(credentials, http=httplib2.Http(timeout=TIMEOUT_SEGUNDOS))
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
 def listar_planilhas(servico, folder_id: str) -> list[dict]:

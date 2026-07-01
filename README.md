@@ -139,8 +139,20 @@ Use `validar()` em `utils/excel.py` para travar cedo se a planilha sair do contr
 
 1. Suba o projeto no GitHub (`cap51-dil/manutencao`)
 2. Acesse <https://share.streamlit.io> → Deploy → `app.py`
-3. Em **Settings → Secrets**, cole o conteúdo do `secrets.toml`
+3. Em **Settings → Secrets**, cole o conteúdo do `secrets.toml` (com aspas nos grupos com acento)
 4. Deixe o app **privado** e cadastre e-mails na allow-list
+5. Faça **Reboot app** após alterar secrets ou o código
+
+**“Your app is in the oven” sem parar**
+
+| Causa comum | O que fazer |
+|-------------|-------------|
+| Secrets com TOML inválido | Use `[planilhas."Manutenção"]` (com aspas), não `[planilhas.Manutenção]` |
+| `private_key` mal colada | Bloco multilinha `""" ... """` no painel de Secrets |
+| App sem acesso ao GitHub | Autorize o Streamlit na org/repo (`cap51-dil`) |
+| Primeira carga lenta no Drive | Aguarde 1–2 min após o deploy; use **Manage app → Logs** para ver erros |
+
+Se os logs passarem de “Spinning up manager process” e mostrarem traceback, o problema é no código ou nos secrets — não no deploy em si.
 
 ---
 

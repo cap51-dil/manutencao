@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 from utils.branding import injetar_estilos
 from utils.clean import carregar_planilha_local, limpar_planilha
@@ -54,6 +55,24 @@ def carregar_dados(
     return df, meta
 
 
+def _ler_config_secrets() -> tuple[dict, dict, dict]:
+    try:
+        return (
+            dict(st.secrets.get("servicos", {})),
+            dict(st.secrets.get("planilhas", {})),
+            dict(st.secrets.get("locais", {})),
+        )
+    except StreamlitSecretNotFoundError as exc:
+        st.error("Não foi possível ler os Secrets do app.")
+        st.exception(exc)
+        st.markdown(
+            "No **Streamlit Cloud → Settings → Secrets**, confira:\n"
+            "- grupos com acento entre aspas: `[planilhas.\"Manutenção\"]`\n"
+            "- `private_key` em bloco multilinha (modelo em `.streamlit/secrets.toml.example`)"
+        )
+        st.stop()
+
+
 def main() -> None:
     st.set_page_config(
         page_title="APS 5.1 — Dados",
@@ -61,15 +80,18 @@ def main() -> None:
     )
     injetar_estilos()
 
+    # Primeira execução rápida: ajuda o health check do Streamlit Cloud a concluir.
+    if "boot_ok" not in st.session_state:
+        st.session_state.boot_ok = True
+        st.rerun()
+
     if "versao_cache" not in st.session_state:
         st.session_state.versao_cache = 0
 
-    servicos = dict(st.secrets.get("servicos", {}))
-    planilhas_cfg = dict(st.secrets.get("planilhas", {}))
-    locais_cfg = dict(st.secrets.get("locais", {}))
+    servicos, planilhas_cfg, locais_cfg = _ler_config_secrets()
 
     if not servicos:
-        st.error("Nenhum serviço configurado em [servicos] no secrets.toml.")
+        st.error("Nenhum serviço configurado em [servicos] nos Secrets.")
         st.stop()
 
     with st.sidebar:
@@ -79,7 +101,7 @@ def main() -> None:
 
         planilhas_servico = dict(planilhas_cfg.get(servico, {}))
         if not planilhas_servico:
-            st.error(f"Nenhuma planilha em [planilhas.{servico}] no secrets.toml.")
+            st.error(f"Nenhuma planilha em [planilhas.\"{servico}\"] nos Secrets.")
             st.stop()
 
         planilha = st.selectbox("Planilha", options=list(planilhas_servico.keys()))
@@ -102,21 +124,22 @@ def main() -> None:
             st.rerun()
 
     try:
-        df, meta = carregar_dados(
-            servico=servico,
-            planilha=planilha,
-            folder_id=folder_id,
-            padrao_nome=padrao_nome,
-            caminho_local=caminho_local,
-            usar_local=usar_local,
-            _versao=st.session_state.versao_cache,
-        )
+        with st.spinner("Carregando dados do Drive…"):
+            df, meta = carregar_dados(
+                servico=servico,
+                planilha=planilha,
+                folder_id=folder_id,
+                padrao_nome=padrao_nome,
+                caminho_local=caminho_local,
+                usar_local=usar_local,
+                _versao=st.session_state.versao_cache,
+            )
     except Exception as exc:
         msg = str(exc)
         if "PEM" in msg or "private_key" in msg.lower():
             st.error(f"Erro ao carregar dados: {exc}")
             st.info(
-                "A `private_key` no `secrets.toml` provavelmente está mal formatada. "
+                "A `private_key` nos Secrets provavelmente está mal formatada. "
                 "Use o formato multilinha do `.streamlit/secrets.toml.example` "
                 "ou garanta que `\\n` no JSON virou quebra de linha real. "
                 "[Documentação PEM](https://cryptography.io/en/latest/faq/#why-can-t-i-import-my-pem-file)"
@@ -149,5 +172,4 @@ def _tem_credenciais_gcp() -> bool:
         return False
 
 
-if __name__ == "__main__":
-    main()
+main()
