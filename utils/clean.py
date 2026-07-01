@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import unicodedata
+
 from cleaners.acesso_mais_seguro import limpar as limpar_acesso_mais_seguro
 from cleaners.camaras_vacina import limpar as limpar_camaras_vacina
 from cleaners.chamados_cap import limpar as limpar_chamados_cap
@@ -25,14 +27,40 @@ CLEANERS: dict[tuple[str, str], object] = {
 }
 
 
+def _normalizar_chave(texto: str) -> str:
+    texto = unicodedata.normalize("NFKD", str(texto))
+    return "".join(c for c in texto if not unicodedata.combining(c)).strip().casefold()
+
+
+_CLEANERS_NORM: dict[tuple[str, str], object] = {
+    (_normalizar_chave(servico), _normalizar_chave(planilha)): cleaner
+    for (servico, planilha), cleaner in CLEANERS.items()
+}
+
+
+def _resolver_cleaner(servico: str, planilha: str):
+    servico = servico.strip()
+    planilha = planilha.strip()
+    chave = (servico, planilha)
+    if chave in CLEANERS:
+        return CLEANERS[chave]
+    return _CLEANERS_NORM.get((_normalizar_chave(servico), _normalizar_chave(planilha)))
+
+
 def limpar_planilha(conteudo: bytes, servico: str, planilha: str):
     """Dispatcher para o cleaner da planilha dentro do serviço."""
-    chave = (servico, planilha)
-    if chave not in CLEANERS:
-        raise ValueError(
-            f"Planilha '{planilha}' do serviço '{servico}' sem cleaner configurado."
+    cleaner = _resolver_cleaner(servico, planilha)
+    if cleaner is None:
+        disponiveis = sorted(
+            nome for srv, nome in CLEANERS if _normalizar_chave(srv) == _normalizar_chave(servico)
         )
-    return CLEANERS[chave](conteudo)
+        raise ValueError(
+            f"Planilha '{planilha}' do serviço '{servico}' sem cleaner configurado. "
+            f"Cleaners registrados para este serviço: {disponiveis or '(nenhum)'}. "
+            "Se você acabou de atualizar o código, reinicie o Streamlit "
+            "(local) ou faça Reboot app no Streamlit Cloud."
+        )
+    return cleaner(conteudo)
 
 
 def carregar_planilha_local(caminho: str) -> bytes:
