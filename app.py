@@ -7,26 +7,30 @@ from pathlib import Path
 
 import streamlit as st
 
+from utils.branding import injetar_estilos
 from utils.clean import carregar_planilha_local, limpar_planilha
 from utils.dashboard import render_dashboard
-from utils.drive import carregar_planilha_setor
-
-PLANILHA_LOCAL = "Cópia de STATUS CÂMARAS DE VACINA 2026 - AP 5.1.xlsx"
 
 
 @st.cache_data(show_spinner="Carregando dados...")
 def carregar_dados(
-    setor: str,
+    servico: str,
+    planilha: str,
     folder_id: str,
     padrao_nome: str | None,
+    caminho_local: str | None,
     usar_local: bool,
     _versao: int,
 ):
     if usar_local:
-        caminho = Path(PLANILHA_LOCAL)
+        if not caminho_local:
+            raise FileNotFoundError(
+                f"Planilha local não configurada para '{planilha}' em [locais.{servico}]."
+            )
+        caminho = Path(caminho_local)
         if not caminho.exists():
             raise FileNotFoundError(
-                f"Planilha local não encontrada: {PLANILHA_LOCAL}. "
+                f"Planilha local não encontrada: {caminho_local}. "
                 "Use o Drive ou coloque o arquivo na raiz do projeto."
             )
         raw = carregar_planilha_local(str(caminho))
@@ -36,36 +40,60 @@ def carregar_dados(
             "file_id": "local",
         }
     else:
+        try:
+            from utils.drive import carregar_planilha
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "Dependências do Google Drive não instaladas. "
+                "Ative o ambiente virtual e rode: pip install -r requirements.txt"
+            ) from exc
         credenciais = dict(st.secrets["gcp_service_account"])
-        raw, meta = carregar_planilha_setor(credenciais, folder_id, padrao_nome)
+        raw, meta = carregar_planilha(credenciais, folder_id, padrao_nome)
 
-    df = limpar_planilha(raw, setor)
+    df = limpar_planilha(raw, servico, planilha)
     return df, meta
 
 
 def main() -> None:
-    st.set_page_config(page_title="APS 5.1 — Dados", layout="wide")
+    st.set_page_config(
+        page_title="APS 5.1 — Dados",
+        layout="wide",
+    )
+    injetar_estilos()
 
     if "versao_cache" not in st.session_state:
         st.session_state.versao_cache = 0
 
-    setores = dict(st.secrets.get("setores", {}))
-    arquivos = dict(st.secrets.get("arquivos", {}))
+    servicos = dict(st.secrets.get("servicos", {}))
+    planilhas_cfg = dict(st.secrets.get("planilhas", {}))
+    locais_cfg = dict(st.secrets.get("locais", {}))
 
-    if not setores:
-        st.error("Nenhum setor configurado em [setores] no secrets.toml.")
+    if not servicos:
+        st.error("Nenhum serviço configurado em [servicos] no secrets.toml.")
         st.stop()
 
     with st.sidebar:
         st.header("Configurações")
-        setor = st.selectbox("Setor", options=list(setores.keys()))
-        folder_id = setores[setor]
-        padrao_nome = arquivos.get(setor)
+        servico = st.selectbox("Serviço", options=list(servicos.keys()))
+        folder_id = servicos[servico]
+
+        planilhas_servico = dict(planilhas_cfg.get(servico, {}))
+        if not planilhas_servico:
+            st.error(f"Nenhuma planilha em [planilhas.{servico}] no secrets.toml.")
+            st.stop()
+
+        planilha = st.selectbox("Planilha", options=list(planilhas_servico.keys()))
+        padrao_nome = planilhas_servico[planilha]
+        caminho_local = dict(locais_cfg.get(servico, {})).get(planilha)
 
         usar_local = st.checkbox(
             "Usar planilha local (dev)",
-            value=not _tem_credenciais_gcp(),
-            help="Lê o arquivo .xlsx na raiz do projeto, sem acessar o Drive.",
+            value=not _tem_credenciais_gcp() and bool(caminho_local),
+            disabled=not caminho_local,
+            help=(
+                "Lê o arquivo .xlsx na raiz do projeto, sem acessar o Drive. "
+                "Disponível apenas para planilhas com entrada em [locais]."
+            ),
         )
 
         if st.button("Atualizar dados", type="primary"):
@@ -75,14 +103,26 @@ def main() -> None:
 
     try:
         df, meta = carregar_dados(
-            setor=setor,
+            servico=servico,
+            planilha=planilha,
             folder_id=folder_id,
             padrao_nome=padrao_nome,
+            caminho_local=caminho_local,
             usar_local=usar_local,
             _versao=st.session_state.versao_cache,
         )
     except Exception as exc:
-        st.error(f"Erro ao carregar dados: {exc}")
+        msg = str(exc)
+        if "PEM" in msg or "private_key" in msg.lower():
+            st.error(f"Erro ao carregar dados: {exc}")
+            st.info(
+                "A `private_key` no `secrets.toml` provavelmente está mal formatada. "
+                "Use o formato multilinha do `.streamlit/secrets.toml.example` "
+                "ou garanta que `\\n` no JSON virou quebra de linha real. "
+                "[Documentação PEM](https://cryptography.io/en/latest/faq/#why-can-t-i-import-my-pem-file)"
+            )
+        else:
+            st.error(f"Erro ao carregar dados: {exc}")
         st.stop()
 
     with st.sidebar:
@@ -98,7 +138,7 @@ def main() -> None:
             st.write(f"Linhas: {len(df)} | Colunas: {len(df.columns)}")
             st.dataframe(df.head(5))
 
-    render_dashboard(df, setor)
+    render_dashboard(df, servico, planilha)
 
 
 def _tem_credenciais_gcp() -> bool:

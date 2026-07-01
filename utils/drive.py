@@ -22,8 +22,11 @@ def _normalizar(texto: str) -> str:
 
 
 def _criar_servico(credenciais: dict[str, Any]):
-    creds = service_account.Credentials.from_service_account_info(credenciais, scopes=SCOPES)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    from utils.gcp import normalizar_credenciais_gcp
+
+    creds = normalizar_credenciais_gcp(credenciais)
+    credentials = service_account.Credentials.from_service_account_info(creds, scopes=SCOPES)
+    return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 
 def listar_planilhas(servico, folder_id: str) -> list[dict]:
@@ -80,7 +83,7 @@ def baixar_arquivo(servico, arquivo: dict) -> bytes:
     return buffer.read()
 
 
-def carregar_planilha_setor(
+def carregar_planilha(
     credenciais: dict[str, Any],
     folder_id: str,
     padrao_nome: str | None = None,

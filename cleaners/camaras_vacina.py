@@ -1,4 +1,4 @@
-"""Cleaner da planilha STATUS CÂMARAS DE VACINA — setor Manutenção."""
+"""Cleaner da planilha STATUS CÂMARAS DE VACINA — serviço Manutenção."""
 
 from __future__ import annotations
 
@@ -78,8 +78,8 @@ def limpar(conteudo: bytes) -> pd.DataFrame:
     df["marca"] = df["marca"].ffill()
 
     mask_total = df["unidade"].astype(str).str.contains("Total", case=False, na=False)
-    mask_sem_status = df["status"].isna()
-    df = df[~mask_total & ~mask_sem_status].copy()
+    df = df[~mask_total].copy()
+    df["status"] = df["status"].fillna("Operacional")
 
     df["data_ocorrencia"] = pd.to_datetime(df["data_ocorrencia"], errors="coerce")
     df["abertura_os"] = pd.to_datetime(df["abertura_os"], errors="coerce")
