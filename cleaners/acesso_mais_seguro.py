@@ -72,6 +72,9 @@ def limpar(conteudo: bytes) -> pd.DataFrame:
 
     df["data"] = pd.to_datetime(df["data"], errors="coerce")
     df = df.dropna(subset=["data"])
+    df["ano"] = df["data"].dt.year
+    df["quadrimestre"] = ((df["data"].dt.month - 1) // 4) + 1
+    df["mes_ano"] = df["data"].dt.to_period("M").dt.strftime("%Y-%m")
     df = df.sort_values(["data", "unidade"]).reset_index(drop=True)
 
     invalidos = set(df["status_cor"].unique()) - CORES_VALIDAS

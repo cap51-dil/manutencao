@@ -419,42 +419,206 @@ def _render_painel_equipamentos(
     _botao_csv(filtrado, nome_csv)
 
 
+_CORES_AMS = {
+    "VERDE": "#22c55e",
+    "AMARELO": "#eab308",
+    "LARANJA": "#f97316",
+    "VERMELHO": "#ef4444",
+}
+_ORDEM_CORES_AMS = ["VERDE", "AMARELO", "LARANJA", "VERMELHO"]
+_ALERTAS_AMS = {"AMARELO", "LARANJA", "VERMELHO"}
+_ORDEM_SEVERIDADE_AMS = {"VERMELHO": 0, "LARANJA": 1, "AMARELO": 2}
+_QUADRIMESTRES_AMS = {
+    1: "1º (Jan–Abr)",
+    2: "2º (Mai–Ago)",
+    3: "3º (Set–Dez)",
+}
+_MESES_PT = {
+    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
+}
+
+
+def _enriquecer_acesso_mais_seguro(df: pd.DataFrame) -> pd.DataFrame:
+    """Garante colunas derivadas mesmo com cache antigo."""
+    out = df.copy()
+    if "ano" not in out.columns:
+        out["ano"] = out["data"].dt.year
+    if "quadrimestre" not in out.columns:
+        out["quadrimestre"] = ((out["data"].dt.month - 1) // 4) + 1
+    if "mes_ano" not in out.columns:
+        out["mes_ano"] = out["data"].dt.to_period("M").astype(str)
+    return out
+
+
+def _calc_pct_status(df: pd.DataFrame, status: str) -> float:
+    total = len(df)
+    if not total:
+        return 0.0
+    return (df["status_cor"] == status).sum() / total * 100
+
+
+def _calc_pct_alertas(df: pd.DataFrame) -> float:
+    total = len(df)
+    if not total:
+        return 0.0
+    return df["status_cor"].isin(_ALERTAS_AMS).sum() / total * 100
+
+
+def _aplicar_cores_ams(fig):
+    fig.update_layout(legend_title_text="Status")
+    return fig
+
+
+def _fig_pie_ams(df: pd.DataFrame, titulo: str):
+    cor_counts = df["status_cor"].value_counts().reindex(_ORDEM_CORES_AMS).dropna()
+    cor_counts = cor_counts.reset_index()
+    cor_counts.columns = ["status_cor", "quantidade"]
+    fig = px.pie(
+        cor_counts,
+        names="status_cor",
+        values="quantidade",
+        title=titulo,
+        color="status_cor",
+        color_discrete_map=_CORES_AMS,
+        category_orders={"status_cor": _ORDEM_CORES_AMS},
+    )
+    return _aplicar_cores_ams(fig)
+
+
+def _fig_bar_unidade_ams(df: pd.DataFrame, titulo: str):
+    por_unidade = (
+        df.groupby(["unidade", "status_cor"], observed=True)
+        .size()
+        .reset_index(name="quantidade")
+    )
+    fig = px.bar(
+        por_unidade,
+        x="unidade",
+        y="quantidade",
+        color="status_cor",
+        title=titulo,
+        barmode="stack",
+        color_discrete_map=_CORES_AMS,
+        category_orders={"status_cor": _ORDEM_CORES_AMS},
+    )
+    fig.update_layout(xaxis_tickangle=-45)
+    return _aplicar_cores_ams(fig)
+
+
+def _rotulo_mes_ano(mes_ano: str) -> str:
+    ano, mes = mes_ano.split("-")
+    return f"{_MESES_PT[int(mes)]}/{ano}"
+
+
+def _fig_trend_alertas_ams(df: pd.DataFrame, ano_ref: int | None):
+    trend_base = df[df["status_cor"].isin(_ALERTAS_AMS)].copy()
+    if ano_ref is not None:
+        trend_base = trend_base[trend_base["ano"] == ano_ref]
+    if trend_base.empty:
+        return None
+
+    trend = (
+        trend_base.groupby(["mes_ano", "status_cor"], observed=True)
+        .size()
+        .reset_index(name="quantidade")
+    )
+    meses_ordem = sorted(trend["mes_ano"].unique())
+    trend["mes_label"] = trend["mes_ano"].map(_rotulo_mes_ano)
+    trend["mes_label"] = pd.Categorical(
+        trend["mes_label"],
+        categories=[_rotulo_mes_ano(m) for m in meses_ordem],
+        ordered=True,
+    )
+    fig = px.bar(
+        trend.sort_values("mes_label"),
+        x="mes_label",
+        y="quantidade",
+        color="status_cor",
+        title="Alertas por mês",
+        barmode="group",
+        color_discrete_map=_CORES_AMS,
+        category_orders={"status_cor": ["AMARELO", "LARANJA", "VERMELHO"]},
+        labels={"mes_label": "Mês", "quantidade": "Total", "status_cor": "Status"},
+    )
+    return _aplicar_cores_ams(fig)
+
+
 def render_acesso_mais_seguro(df: pd.DataFrame) -> None:
     render_cabecalho("Acesso Mais Seguro — AP 5.1")
+    df = _enriquecer_acesso_mais_seguro(df)
 
-    meses = sorted(df["mes"].unique())
-    mes_sel = st.selectbox("Mês", options=meses, index=len(meses) - 1)
-    df_mes = df[df["mes"] == mes_sel].copy()
+    anos = sorted(df["ano"].unique())
+    modo = st.radio("Período", options=["Mês", "Quadrimestre", "Ano"], horizontal=True)
+
+    ano_ref: int | None = None
+    if modo == "Mês":
+        meses = sorted(df["mes"].unique())
+        mes_sel = st.selectbox("Mês", options=meses, index=len(meses) - 1)
+        df_periodo = df[df["mes"] == mes_sel].copy()
+        ano_ref = int(df_periodo["ano"].mode().iloc[0]) if not df_periodo.empty else None
+        rotulo_periodo = mes_sel
+    elif modo == "Quadrimestre":
+        c_ano, c_quad = st.columns(2)
+        quad_atual = int(df[df["ano"] == df["ano"].max()]["quadrimestre"].mode().iloc[0])
+        with c_ano:
+            ano_sel = st.selectbox("Ano", options=anos, index=len(anos) - 1)
+        with c_quad:
+            quad_sel = st.selectbox(
+                "Quadrimestre",
+                options=list(_QUADRIMESTRES_AMS.keys()),
+                format_func=lambda q: _QUADRIMESTRES_AMS[q],
+                index=quad_atual - 1,
+            )
+        df_periodo = df[(df["ano"] == ano_sel) & (df["quadrimestre"] == quad_sel)].copy()
+        ano_ref = int(ano_sel)
+        rotulo_periodo = f"{_QUADRIMESTRES_AMS[quad_sel]} / {ano_sel}"
+    else:
+        ano_sel = st.selectbox("Ano", options=anos, index=len(anos) - 1)
+        df_periodo = df[df["ano"] == ano_sel].copy()
+        ano_ref = int(ano_sel)
+        rotulo_periodo = str(ano_sel)
 
     c1, c2 = st.columns(2)
     with c1:
-        unidades = _filtro_popover("Unidade", sorted(df_mes["unidade"].unique()), "filtro_ams_u")
+        unidades = _filtro_popover(
+            "Unidade", sorted(df_periodo["unidade"].unique()), "filtro_ams_u"
+        )
     with c2:
-        cores = _filtro_popover("Status", sorted(df_mes["status_cor"].unique()), "filtro_ams_c")
+        cores = _filtro_popover(
+            "Status", sorted(df_periodo["status_cor"].unique()), "filtro_ams_c"
+        )
 
     if unidades:
-        df_mes = df_mes[df_mes["unidade"].isin(unidades)]
+        df_periodo = df_periodo[df_periodo["unidade"].isin(unidades)]
     if cores:
-        df_mes = df_mes[df_mes["status_cor"].isin(cores)]
+        df_periodo = df_periodo[df_periodo["status_cor"].isin(cores)]
 
-    total = len(df_mes)
-    verdes = (df_mes["status_cor"] == "VERDE").sum()
-    alertas = df_mes["status_cor"].isin(["AMARELO", "LARANJA", "VERMELHO"]).sum()
-    taxa = (verdes / total * 100) if total else 0.0
+    df_trend = df.copy()
+    if unidades:
+        df_trend = df_trend[df_trend["unidade"].isin(unidades)]
+    if cores:
+        df_trend = df_trend[df_trend["status_cor"].isin(cores)]
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Registros no mês", total)
-    m2.metric("Verde", verdes)
-    m3.metric("Amarelo + Laranja + Vermelho", alertas)
-    m4.metric("Taxa verde", f"{taxa:.1f}%")
+    total = len(df_periodo)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1.metric("Registros", total)
+    m2.metric("% Amarelo", f"{_calc_pct_status(df_periodo, 'AMARELO'):.1f}%")
+    m3.metric("% Laranja", f"{_calc_pct_status(df_periodo, 'LARANJA'):.1f}%")
+    m4.metric("% Vermelho", f"{_calc_pct_status(df_periodo, 'VERMELHO'):.1f}%")
+    m5.metric("% Alertas", f"{_calc_pct_alertas(df_periodo):.1f}%")
+    m6.metric("% Verde", f"{_calc_pct_status(df_periodo, 'VERDE'):.1f}%")
 
-    st.subheader("Alertas do mês")
-    df_alertas = df_mes[df_mes["status_cor"].isin(["AMARELO", "LARANJA", "VERMELHO"])]
+    st.subheader(f"Alertas — {rotulo_periodo}")
+    df_alertas = df_periodo[df_periodo["status_cor"].isin(_ALERTAS_AMS)].copy()
     if df_alertas.empty:
-        st.success("Nenhum alerta no mês e filtros atuais.")
+        st.success("Nenhum alerta no período e filtros atuais.")
     else:
+        df_alertas["_ordem"] = df_alertas["status_cor"].map(_ORDEM_SEVERIDADE_AMS)
         st.dataframe(
-            df_alertas[["unidade", "data", "status_cor"]].sort_values(["status_cor", "unidade"]),
+            df_alertas.sort_values(["_ordem", "unidade", "data"])[
+                ["unidade", "data", "status_cor"]
+            ],
             use_container_width=True,
             hide_index=True,
         )
@@ -462,36 +626,33 @@ def render_acesso_mais_seguro(df: pd.DataFrame) -> None:
     st.subheader("Visualizações")
     col_graf1, col_graf2 = st.columns(2)
     with col_graf1:
-        cor_counts = df_mes["status_cor"].value_counts().reset_index()
-        cor_counts.columns = ["status_cor", "quantidade"]
-        fig = px.pie(cor_counts, names="status_cor", values="quantidade", title="Distribuição por cor")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            _fig_pie_ams(df_periodo, "Distribuição por cor"),
+            use_container_width=True,
+        )
     with col_graf2:
-        por_unidade = (
-            df_mes.groupby(["unidade", "status_cor"])
-            .size()
-            .reset_index(name="quantidade")
+        st.plotly_chart(
+            _fig_bar_unidade_ams(df_periodo, "Status por unidade"),
+            use_container_width=True,
         )
-        fig = px.bar(
-            por_unidade,
-            x="unidade",
-            y="quantidade",
-            color="status_cor",
-            title="Status por unidade",
-            barmode="stack",
-        )
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
 
-    pivot = df_mes.pivot_table(
-        index="unidade",
-        columns="data",
-        values="status_cor",
-        aggfunc="first",
-    )
-    st.subheader("Mapa do mês")
-    st.dataframe(pivot, use_container_width=True)
-    _botao_csv(df_mes, "acesso_mais_seguro_filtrado.csv")
+    fig_trend = _fig_trend_alertas_ams(df_trend, ano_ref)
+    if fig_trend is not None:
+        st.plotly_chart(fig_trend, use_container_width=True)
+    else:
+        st.info("Sem alertas para exibir no gráfico mensal com os filtros atuais.")
+
+    if modo == "Mês":
+        pivot = df_periodo.pivot_table(
+            index="unidade",
+            columns="data",
+            values="status_cor",
+            aggfunc="first",
+        )
+        st.subheader("Mapa do mês")
+        st.dataframe(pivot, use_container_width=True)
+
+    _botao_csv(df_periodo, "acesso_mais_seguro_filtrado.csv")
 
 
 _COLUNAS_CHAMADOS = [
